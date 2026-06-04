@@ -193,7 +193,7 @@ namespace SAModel
 
 		public NJS_MOTION(byte[] file, int address, uint imageBase, int nummodels, Dictionary<int, string> labels = null, bool shortrot = false, int[] numverts = null, string actionName = null, string objectName = null, bool shortcheck = true)
 		{
-			if (nummodels == 0) 
+			if (nummodels == 0)
 				nummodels = CalculateModelParts(file, address, imageBase);
 			ActionName = actionName;
 			ObjectName = objectName;
@@ -820,6 +820,7 @@ namespace SAModel
 			List<byte> result = new List<byte>();
 			List<byte> parameterData = new List<byte>();
 			List<uint> pofOffsets = new List<uint>();
+			const uint ninjaMotionDataOffset = 0xC;
 			uint[] posoffs = new uint[ModelParts];
 			int[] posframes = new int[ModelParts];
 			bool hasPos = false;
@@ -1029,6 +1030,10 @@ namespace SAModel
 					foreach (KeyValuePair<int, Vertex[]> item in model.Value.Vertex)
 					{
 						result.AddRange(ByteConverter.GetBytes(item.Key));
+						if (useNMDM)
+						{
+							pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+						}
 						result.AddRange(ByteConverter.GetBytes(offs[i++]));
 					}
 					for (int u = 0; u < model.Value.Vertex.Count; u++)
@@ -1093,6 +1098,10 @@ namespace SAModel
 					foreach (KeyValuePair<int, Vertex[]> item in model.Value.Normal)
 					{
 						result.AddRange(ByteConverter.GetBytes(item.Key));
+						if (useNMDM)
+						{
+							pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+						}
 						result.AddRange(ByteConverter.GetBytes(offs[i++]));
 					}
 					for (int u = 0; u < model.Value.Normal.Count; u++)
@@ -1460,73 +1469,115 @@ namespace SAModel
 				//Offsets
 				if (hasPos)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(posoffs[i]));
-					pofOffsets.Add(posoffs[i]);
 				}
 				if (hasRot)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(rotoffs[i]));
-					pofOffsets.Add(rotoffs[i]);
 				}
 				if (hasScl)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(scloffs[i]));
-					pofOffsets.Add(scloffs[i]);
 				}
 				if (hasVec)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(vecoffs[i]));
-					pofOffsets.Add(vecoffs[i]);
 				}
 				if (hasVert)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(vertoffs[i]));
-					pofOffsets.Add(vertoffs[i]);
 				}
 				if (hasNorm)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(normoffs[i]));
-					pofOffsets.Add(normoffs[i]);
 				}
 				if (hasTarg)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(targoffs[i]));
-					pofOffsets.Add(targoffs[i]);
 				}
 				if (hasRoll)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(rolloffs[i]));
-					pofOffsets.Add(rolloffs[i]);
 				}
 				if (hasAng)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(angoffs[i]));
-					pofOffsets.Add(angoffs[i]);
 				}
 				if (hasCol)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(coloffs[i]));
-					pofOffsets.Add(coloffs[i]);
 				}
 				if (hasInt)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(intoffs[i]));
-					pofOffsets.Add(intoffs[i]);
 				}
 				if (hasSpot)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(spotoffs[i]));
-					pofOffsets.Add(spotoffs[i]);
 				}
 				if (hasPnt)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(pntoffs[i]));
-					pofOffsets.Add(pntoffs[i]);
 				}
 				if (hasQuat)
 				{
+					if (useNMDM)
+					{
+						pofOffsets.Add(ninjaMotionDataOffset + (uint)result.Count);
+					}
 					result.AddRange(ByteConverter.GetBytes(quatoffs[i]));
-					pofOffsets.Add(quatoffs[i]);
 				}
 
 				//Frame count
@@ -1634,7 +1685,7 @@ namespace SAModel
 			bool hasPnt = false;
 			bool hasQuat = false;
 			string id = Name.MakeIdentifier();
-			if (labels == null) 
+			if (labels == null)
 				labels = new List<string>();
 			foreach (KeyValuePair<int, AnimModelData> model in Models)
 			{
@@ -1721,7 +1772,7 @@ namespace SAModel
 							writer.WriteLine();
 							labels.Add(model.Value.VertexItemName[z]);
 						}
-						z++;					
+						z++;
 					}
 					writer.Write("NJS_MKEY_P ");
 					writer.Write(model.Value.VertexName.MakeIdentifier());
@@ -1754,7 +1805,7 @@ namespace SAModel
 							writer.WriteLine();
 							labels.Add(model.Value.NormalItemName[z]);
 						}
-						z++;			
+						z++;
 					}
 					writer.Write("NJS_MKEY_P ");
 					writer.Write(model.Value.NormalName.MakeIdentifier());
@@ -2961,7 +3012,7 @@ namespace SAModel
 		public string QuaternionName;
 		public int NbKeyframes;
 
-		public AnimModelData()	{ }
+		public AnimModelData() { }
 
 		public Vertex GetPosition(float frame)
 		{
