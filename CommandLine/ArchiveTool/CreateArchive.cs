@@ -60,9 +60,25 @@ namespace ArchiveTool
             {
                 GenericArchive arc;
                 string indexfilename = Path.Combine(filePath, "index.txt");
-				if (createARCX)
+                if (createARCX)
 				{
 					CreateARCX(filePath);
+					return;
+				}
+				string mldInfoFilename = Path.Combine(filePath, "FileInfo.amld");
+				if (File.Exists(mldInfoFilename) && !MLDArchive.IsMLDFolder(filePath))
+				{
+					Console.WriteLine("FileInfo.amld is not a rebuild manifest. Re-extract the MLD with this version of ArchiveTool before rebuilding.");
+					return;
+				}
+				if (MLDArchive.IsMLDFolder(filePath))
+				{
+					Console.WriteLine("Creating MLD archive from folder: {0}", filePath);
+					arc = new MLDArchive(filePath);
+					byte[] mldData = arc.GetBytes();
+					outputPath = Path.GetFullPath(filePath) + ".mld";
+					Console.WriteLine("Output file: {0}", outputPath);
+					File.WriteAllBytes(outputPath, mldData);
 					return;
 				}
                 if (!File.Exists(indexfilename))

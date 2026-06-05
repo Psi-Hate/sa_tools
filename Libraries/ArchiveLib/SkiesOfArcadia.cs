@@ -2,11 +2,13 @@
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using AuroraLib.Compression.Algorithms;
 using AuroraLib.Core.IO;
 using SplitTools;
 using SAModel;
+using IniDictionary = System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<string, string>>;
 
 namespace ArchiveLib
 {
@@ -26,9 +28,95 @@ namespace ArchiveLib
 			public MLDArchiveEntry() { }
 		}
 
+		public class MLDArchiveInfo
+		{
+			[IniAlwaysInclude]
+			public string Name { get; set; } = string.Empty;
+
+			[IniAlwaysInclude]
+			public bool BigEndian { get; set; }
+
+			public string TextureArchive { get; set; } = string.Empty;
+
+			[IniCollection(IniCollectionMode.SingleLine, Format = ",")]
+			public List<int> TextureGBIX { get; set; } = new();
+
+			[IniCollection(IniCollectionMode.SingleLine, Format = ",")]
+			public List<int> TextureGBIX2 { get; set; } = new();
+
+			[IniCollection(IniCollectionMode.Normal)]
+			public List<MLDEntryInfo> Entries { get; set; } = new();
+		}
+
+		public class MLDEntryInfo
+		{
+			[IniAlwaysInclude]
+			public int Index { get; set; }
+
+			[IniAlwaysInclude]
+			public int TblID { get; set; }
+
+			[IniAlwaysInclude]
+			public string Fxn { get; set; } = string.Empty;
+
+			[IniAlwaysInclude]
+			public Vertex Position { get; set; } = new();
+
+			[IniAlwaysInclude]
+			public Vertex Rotation { get; set; } = new();
+
+			[IniAlwaysInclude]
+			public Vertex Scale { get; set; } = new();
+
+			[IniCollection(IniCollectionMode.SingleLine, Format = ",")]
+			public List<int> GroundLinks { get; set; } = new();
+
+			[IniCollection(IniCollectionMode.SingleLine, Format = ",")]
+			public List<int> ParamList2 { get; set; } = new();
+
+			[IniCollection(IniCollectionMode.SingleLine, Format = ",")]
+			public List<int> FunctionParameters { get; set; } = new();
+
+			[IniCollection(IniCollectionMode.Normal)]
+			public List<string> Objects { get; set; } = new();
+
+			[IniCollection(IniCollectionMode.Normal)]
+			public List<string> Grounds { get; set; } = new();
+
+			[IniCollection(IniCollectionMode.Normal)]
+			public List<string> Motions { get; set; } = new();
+
+			public string Texlist { get; set; } = string.Empty;
+		}
+
+		private class MLDEntryBuildState
+		{
+			public MLDEntryInfo Info;
+			public int GroundLinksOffset;
+			public int ParamList2Offset;
+			public int FunctionParametersOffset;
+			public int ObjectListOffset;
+			public int GroundListOffset;
+			public int MotionListOffset;
+			public int TexlistOffset;
+			public List<int> ObjectPointerOffsets = new();
+			public List<int> GroundPointerOffsets = new();
+			public List<int> MotionPointerOffsets = new();
+		}
+
+		private const string InfoFileName = "FileInfo.amld";
+		private string sourceDirectory;
+		private MLDArchiveInfo archiveInfo;
+
 		private void ExtractEntries(nmldArchiveFile archive, string directory)
 		{
-			StringBuilder sb = new StringBuilder();
+			MLDArchiveInfo info = new()
+			{
+				Name = archive.Name,
+				BigEndian = ByteConverter.BigEndian,
+				TextureGBIX = archive.TextureGBIX,
+				TextureGBIX2 = archive.TextureGBIX2
+			};
 
 			// Add Entries
 			foreach (nmldEntry entry in archive.Entries)
@@ -42,19 +130,20 @@ namespace ArchiveLib
 				// Add Ground/Ground Object Files
 				foreach (nmldGround ground in entry.Grounds)
 				{
-					ModelFile mfile = new ModelFile(ModelFormat.Basic, ground.ConvertedObject, null, null);
+					Entries.Add(new MLDArchiveEntry(ground.File, ground.GetFileName()));
+
 					switch (ground.Type)
 					{
 						case nmldGround.GroundType.Ground:
-							Entries.Add(new MLDArchiveEntry(mfile.GetBytes(Path.Combine(directory, ground.Name + ".grnd.sa2mdl")), ground.Name + ".grnd.sa2mdl"));
-							// mfile.SaveToFile(Path.Combine(directory, ground.Name + ".grnd.sa2mdl"));
+							if (ground.ConvertedObject != null)
+							{
+								ModelFile mfile = new ModelFile(ModelFormat.Basic, ground.ConvertedObject, null, null);
+								Entries.Add(new MLDArchiveEntry(mfile.GetBytes(Path.Combine(directory, ground.Name + ".grnd.sa2mdl")), ground.Name + ".grnd.sa2mdl"));
+							}
 							break;
 						case nmldGround.GroundType.GroundObject:
-							//Entries.Add(new MLDArchiveEntry(ground.File, ground.Name + ".gobj"));
-							//mfile.SaveToFile(Path.Combine(directory, ground.Name + ".gobj.sa2mdl"));
 							break;
 						case nmldGround.GroundType.Unknown:
-							Entries.Add(new MLDArchiveEntry(ground.File, ground.Name + ".gunk"));
 							break;
 					}
 				}
@@ -62,21 +151,7 @@ namespace ArchiveLib
 				// Add Motions
 				foreach (nmldMotion motion in entry.Motions)
 				{
-					switch (motion.Type)
-					{
-						case nmldMotion.MotionType.Node:
-							Entries.Add(new MLDArchiveEntry(motion.File, motion.Name + ".njm"));
-							break;
-						case nmldMotion.MotionType.Shape:
-							Entries.Add(new MLDArchiveEntry(motion.File, motion.Name + ".njs"));
-							break;
-						case nmldMotion.MotionType.Camera:
-							Entries.Add(new MLDArchiveEntry(motion.File, motion.Name + ".njc"));
-							break;
-						case nmldMotion.MotionType.Unknown:
-							Entries.Add(new MLDArchiveEntry(motion.File, motion.Name + ".num"));
-							break;
-					}
+					Entries.Add(new MLDArchiveEntry(motion.File, motion.GetFileName()));
 				}
 
 				// Save Texlist
@@ -88,14 +163,15 @@ namespace ArchiveLib
 					entry.Texlist.TexList.Save(Path.Combine(directory, entry.Texlist.Name));
 				}
 
-				sb.Append(entry.WriteEntryInfo());
+				info.Entries.Add(entry.ToArchiveInfo());
 			}
 
 			// Add Info File
-			Entries.Add(new MLDArchiveEntry(Encoding.ASCII.GetBytes(sb.ToString()), "FileInfo.amld"));
+			IniDictionary ini = IniSerializer.Serialize(info);
+			Entries.Add(new MLDArchiveEntry(Encoding.ASCII.GetBytes(string.Join(Environment.NewLine, IniFile.Save(ini))), InfoFileName));
 
 			// Add Texture Archive
-			if (archive.TextureFile != new PuyoFile())
+			if (archive.TextureFile.Entries.Count > 0)
 			{
 				string ext = "";
 				switch (archive.TextureFile.Type)
@@ -107,7 +183,10 @@ namespace ArchiveLib
 						ext = ".gvm";
 						break;
 				}
-				Entries.Add(new MLDArchiveEntry(archive.TextureFile.GetBytes(), archive.Name + ext));
+				info.TextureArchive = archive.Name + ext;
+				Entries.Add(new MLDArchiveEntry(archive.TextureFile.GetBytes(), info.TextureArchive));
+				ini = IniSerializer.Serialize(info);
+				Entries[Entries.Count - 2] = new MLDArchiveEntry(Encoding.ASCII.GetBytes(string.Join(Environment.NewLine, IniFile.Save(ini))), InfoFileName);
 			}
 		}
 
@@ -116,69 +195,483 @@ namespace ArchiveLib
 			string directory = Path.Combine(Path.GetDirectoryName(filepath), Path.GetFileNameWithoutExtension(filepath));
 			string filename = Path.GetFileNameWithoutExtension(filepath);
 			string aklzcheck = Encoding.ASCII.GetString(file, 0, 4);
-			if (aklzcheck == "AKLZ")
-				ByteConverter.BigEndian = true;
-			else
-				ByteConverter.BigEndian = SplitTools.HelperFunctions.CheckBigEndianInt32(file, 0xC);
+			bool bigEndianBackup = ByteConverter.BigEndian;
 
-			nmldArchiveFile archive;
-
-			if (ByteConverter.BigEndian)
+			try
 			{
-				Console.WriteLine("Skies of Arcadia: Legends MLD File");
-
 				if (aklzcheck == "AKLZ")
-				{
-					Console.WriteLine("MLD Archive is Compressed. Decompressing...");
-					byte[] dfile = new byte[0];
+					ByteConverter.BigEndian = true;
+				else
+					ByteConverter.BigEndian = SplitTools.HelperFunctions.CheckBigEndianInt32(file, 0xC);
 
-					// Decompress File Here
-					using (Stream stream = new MemoryStream(file))
+				nmldArchiveFile archive;
+
+				if (ByteConverter.BigEndian)
+				{
+					Console.WriteLine("Skies of Arcadia: Legends MLD File");
+
+					if (aklzcheck == "AKLZ")
 					{
-						using (MemoryPoolStream pool = new AKLZ().Decompress(stream))
+						Console.WriteLine("MLD Archive is Compressed. Decompressing...");
+						byte[] dfile = new byte[0];
+
+						// Decompress File Here
+						using (Stream stream = new MemoryStream(file))
 						{
-							dfile = new byte[pool.ToArray().Length];
-							Array.Copy(pool.ToArray(), dfile, pool.ToArray().Length);
+							using (MemoryPoolStream pool = new AKLZ().Decompress(stream))
+							{
+								dfile = new byte[pool.ToArray().Length];
+								Array.Copy(pool.ToArray(), dfile, pool.ToArray().Length);
+							}
+						}
+
+						if (dfile.Length > 0)
+						{
+							Console.WriteLine("File Decompressed, saving and reading decompressed archive.");
+							Entries.Add(new MLDArchiveEntry(dfile, ("..\\" + filename + "_dec.mld")));
+							archive = new nmldArchiveFile(dfile, filename);
+						}
+						else
+						{
+							Console.WriteLine("Decompression Failed.");
+							archive = new();
 						}
 					}
-
-					if (dfile.Length > 0)
-					{
-						Console.WriteLine("File Decompressed, saving and reading decompressed archive.");
-						Entries.Add(new MLDArchiveEntry(dfile, ("..\\" + filename + "_dec.mld")));
-						archive = new nmldArchiveFile(dfile, filename);
-					}
 					else
-					{
-						Console.WriteLine("Decompression Failed.");
-						archive = new();
-					}
+						archive = new nmldArchiveFile(file, filename);
 				}
 				else
+				{
+					Console.WriteLine("Skies of Arcadia MLD File");
 					archive = new nmldArchiveFile(file, filename);
+				}
+
+				if (archive.Entries.Count > 0)
+				{
+					ExtractEntries(archive, directory);
+				}
+				else
+					Console.WriteLine("Unable to read archive.");
 			}
-			else
+			finally
 			{
-				Console.WriteLine("Skies of Arcadia MLD File");
-				archive = new nmldArchiveFile(file, filename);
+				ByteConverter.BigEndian = bigEndianBackup;
+			}
+		}
+
+		public MLDArchive(string directory)
+		{
+			sourceDirectory = directory;
+			archiveInfo = IniSerializer.Deserialize<MLDArchiveInfo>(Path.Combine(directory, InfoFileName));
+		}
+
+		public static bool IsMLDFolder(string directory)
+		{
+			string infoFile = Path.Combine(directory, InfoFileName);
+
+			if (!File.Exists(infoFile))
+			{
+				return false;
 			}
 
-			if (archive != new nmldArchiveFile())
+			try
 			{
-				ExtractEntries(archive, directory);
+				IniDictionary ini = IniFile.Load(infoFile);
+				return ini.TryGetValue(string.Empty, out Dictionary<string, string> root)
+					&& root.ContainsKey(nameof(MLDArchiveInfo.Name))
+					&& root.ContainsKey(nameof(MLDArchiveInfo.BigEndian));
 			}
-			else
-				Console.WriteLine("Unable to read archive.");
+			catch
+			{
+				return false;
+			}
 		}
 
 		public override byte[] GetBytes()
 		{
-			throw new NotImplementedException();
+			if (archiveInfo == null || sourceDirectory == null)
+			{
+				throw new InvalidOperationException("MLD rebuild requires a folder created from an extracted MLD archive.");
+			}
+
+			bool bigEndianBackup = ByteConverter.BigEndian;
+			ByteConverter.BigEndian = archiveInfo.BigEndian;
+
+			try
+			{
+				return BuildArchive();
+			}
+			finally
+			{
+				ByteConverter.BigEndian = bigEndianBackup;
+			}
 		}
 
 		public override GenericArchiveEntry NewEntry()
 		{
 			return new MLDArchiveEntry();
+		}
+
+		private byte[] BuildArchive()
+		{
+			List<byte> result = new();
+			List<MLDEntryBuildState> states = new();
+			Dictionary<string, int> writtenFiles = new();
+			int entryCount = archiveInfo.Entries.Count;
+			int entryTableOffset = 0x18;
+
+			result.AddRange(new byte[entryTableOffset + (entryCount * 0x68)]);
+			WriteBytes(result, 0x14, Encoding.ASCII.GetBytes("NMLD"));
+
+			int functionParametersOffset = result.Count;
+
+			foreach (MLDEntryInfo entry in archiveInfo.Entries)
+			{
+				MLDEntryBuildState state = new()
+				{
+					Info = entry,
+					GroundLinksOffset = WriteIntList(result, entry.GroundLinks),
+					ParamList2Offset = WriteIntList(result, entry.ParamList2),
+					FunctionParametersOffset = WriteIntList(result, entry.FunctionParameters),
+					ObjectListOffset = WritePointerList(result, entry.Objects, out List<int> objectPointerOffsets),
+					GroundListOffset = WritePointerList(result, entry.Grounds, out List<int> groundPointerOffsets),
+					MotionListOffset = WritePointerList(result, entry.Motions, out List<int> motionPointerOffsets)
+				};
+
+				state.ObjectPointerOffsets = objectPointerOffsets;
+				state.GroundPointerOffsets = groundPointerOffsets;
+				state.MotionPointerOffsets = motionPointerOffsets;
+				state.TexlistOffset = WriteTexlist(result, entry.Texlist);
+				states.Add(state);
+			}
+
+			WriteGapAlignment(result, 0x20);
+			int realDataPointer = result.Count;
+
+			foreach (MLDEntryBuildState state in states)
+			{
+				WriteFileList(result, state.Info.Objects, state.ObjectPointerOffsets, "object", WriteObjectFile, writtenFiles);
+				WriteFileList(result, state.Info.Grounds, state.GroundPointerOffsets, "ground", WriteRawFile, writtenFiles);
+				WriteFileList(result, state.Info.Motions, state.MotionPointerOffsets, "motion", WriteRawFile, writtenFiles);
+			}
+
+			int textureTablePointer = WriteTextureArchive(result, archiveInfo.TextureArchive);
+
+			WriteInt(result, 0, entryCount);
+			WriteInt(result, 4, entryTableOffset);
+			WriteInt(result, 8, functionParametersOffset);
+			WriteInt(result, 0x0C, realDataPointer);
+			WriteInt(result, 0x10, textureTablePointer);
+
+			for (int i = 0; i < states.Count; i++)
+			{
+				WriteEntry(result, entryTableOffset + (i * 0x68), states[i]);
+			}
+
+			return result.ToArray();
+		}
+
+		private delegate void WriteMLDFile(List<byte> result, byte[] data);
+
+		private void WriteFileList(List<byte> result, List<string> files, List<int> pointerOffsets, string fileType, WriteMLDFile writer, Dictionary<string, int> writtenFiles)
+		{
+			for (int i = 0; i < files.Count; i++)
+			{
+				if (string.IsNullOrEmpty(files[i]))
+				{
+					continue;
+				}
+
+				string path = Path.Combine(sourceDirectory, files[i]);
+				if (!File.Exists(path))
+				{
+					throw new FileNotFoundException("MLD rebuild source file is missing.", path);
+				}
+
+				byte[] data = File.ReadAllBytes(path);
+				string fileKey = GetFileKey(fileType, data);
+				if (!writtenFiles.TryGetValue(fileKey, out int fileOffset))
+				{
+					fileOffset = result.Count;
+					writtenFiles[fileKey] = fileOffset;
+					writer(result, data);
+					if (fileType == "motion")
+					{
+						result.AddRange(new byte[0x10]);
+					}
+
+					result.Align(0x20);
+				}
+
+				WriteInt(result, pointerOffsets[i], fileOffset);
+			}
+		}
+
+		private static string GetFileKey(string fileType, byte[] data)
+		{
+			using SHA1 sha1 = SHA1.Create();
+			byte[] hash = sha1.ComputeHash(data);
+			StringBuilder result = new(fileType);
+			result.Append(':');
+
+			for (int i = 0; i < hash.Length; i++)
+			{
+				result.Append(hash[i].ToString("x2"));
+			}
+
+			return result.ToString();
+		}
+
+		private static int WriteIntList(List<byte> result, List<int> values)
+		{
+			int offset = result.Count;
+			result.AddRange(ByteConverter.GetBytes(values.Count));
+
+			foreach (int value in values)
+			{
+				result.AddRange(ByteConverter.GetBytes(value));
+			}
+
+			return offset;
+		}
+
+		private static int WritePointerList(List<byte> result, List<string> files, out List<int> pointerOffsets)
+		{
+			int offset = result.Count;
+			int pointerCount = Math.Max(files.Count, 1);
+			pointerOffsets = new List<int>(files.Count);
+
+			result.AddRange(ByteConverter.GetBytes(files.Count));
+
+			for (int i = 0; i < pointerCount; i++)
+			{
+				if (i < files.Count)
+				{
+					pointerOffsets.Add(result.Count);
+				}
+
+				result.AddRange(new byte[4]);
+			}
+
+			return offset;
+		}
+
+		private int WriteTexlist(List<byte> result, string filename)
+		{
+			const int textureNameLength = 0x20;
+			int offset = result.Count;
+			if (string.IsNullOrEmpty(filename))
+			{
+				result.AddRange(ByteConverter.GetBytes(offset + 8));
+				result.AddRange(new byte[4]);
+				return offset;
+			}
+
+			string path = Path.Combine(sourceDirectory, filename);
+			if (!File.Exists(path))
+			{
+				throw new FileNotFoundException("MLD texlist file is missing.", path);
+			}
+
+			NJS_TEXLIST texlist = NJS_TEXLIST.Load(path);
+			string[] textureNames = texlist.TextureNames ?? Array.Empty<string>();
+			int textureCount = (int)(texlist.NumTextures > 0 ? texlist.NumTextures : (uint)textureNames.Length);
+			int texnameArrayOffset = offset + 8;
+			int stringOffset = texnameArrayOffset + (textureCount * 12);
+
+			result.AddRange(ByteConverter.GetBytes(textureCount > 0 ? texnameArrayOffset : 0));
+			result.AddRange(ByteConverter.GetBytes(textureCount));
+
+			for (int i = 0; i < textureCount; i++)
+			{
+				string textureName = i < textureNames.Length ? textureNames[i] : null;
+				if (string.IsNullOrEmpty(textureName))
+				{
+					result.AddRange(new byte[12]);
+					continue;
+				}
+
+				result.AddRange(ByteConverter.GetBytes(stringOffset + (i * textureNameLength)));
+				result.AddRange(new byte[8]);
+			}
+
+			for (int i = 0; i < textureCount; i++)
+			{
+				string textureName = i < textureNames.Length ? textureNames[i] : null;
+				WriteFixedString(result, textureName, textureNameLength);
+			}
+
+			result.Align(4);
+			return offset;
+		}
+
+		private int WriteTextureArchive(List<byte> result, string filename)
+		{
+			int offset = result.Count;
+			if (string.IsNullOrEmpty(filename))
+			{
+				result.AddRange(new byte[4]);
+				return offset;
+			}
+
+			string path = Path.Combine(sourceDirectory, filename);
+			if (!File.Exists(path))
+			{
+				throw new FileNotFoundException("MLD texture archive file is missing.", path);
+			}
+
+			PuyoFile textureArchive = new(File.ReadAllBytes(path));
+			List<byte[]> textureData = new(textureArchive.Entries.Count);
+			result.AddRange(ByteConverter.GetBytes(textureArchive.Entries.Count));
+
+			for (int i = 0; i < textureArchive.Entries.Count; i++)
+			{
+				GenericArchiveEntry entry = textureArchive.Entries[i];
+				byte[] data = GetMLDTextureData(entry.Data);
+				if (i < archiveInfo.TextureGBIX.Count && data.Length >= 12)
+				{
+					byte[] gbixBytes = ByteConverter.GetBytes(archiveInfo.TextureGBIX[i]);
+					Array.Copy(gbixBytes, 0, data, 8, gbixBytes.Length);
+				}
+
+				if (i < archiveInfo.TextureGBIX2.Count && data.Length >= 16)
+				{
+					byte[] gbixBytes = ByteConverter.GetBytes(archiveInfo.TextureGBIX2[i]);
+					Array.Copy(gbixBytes, 0, data, 12, gbixBytes.Length);
+				}
+
+				textureData.Add(data);
+				WriteMLDTextureName(result, Path.GetFileNameWithoutExtension(entry.Name));
+				result.AddRange(ByteConverter.GetBytes(data.Length));
+			}
+
+			result.AddRange(new byte[0x10]);
+			foreach (byte[] data in textureData)
+			{
+				result.AddRange(data);
+			}
+
+			result.Align(4);
+			return offset;
+		}
+
+		private static void WriteMLDTextureName(List<byte> result, string value)
+		{
+			byte[] bytes = new byte[40];
+			byte[] stringBytes = Encoding.ASCII.GetBytes(value ?? string.Empty);
+			Array.Copy(stringBytes, bytes, Math.Min(stringBytes.Length, bytes.Length - 1));
+			bytes[bytes.Length - 1] = 0x80;
+			result.AddRange(bytes);
+		}
+
+		private static byte[] GetMLDTextureData(byte[] data)
+		{
+			byte[] result = new byte[data.Length - 0x10];
+			Array.Copy(data, result, result.Length);
+
+			int pvrtOffset = FindChunk(result, "PVRT");
+			if (pvrtOffset >= 0)
+			{
+				int pvrtSize = ByteConverter.ToInt32(result, pvrtOffset + 4);
+				byte[] pvrtSizeBytes = ByteConverter.GetBytes(pvrtSize - 0x10);
+				Array.Copy(pvrtSizeBytes, 0, result, pvrtOffset + 4, pvrtSizeBytes.Length);
+			}
+
+			return result;
+		}
+
+		private static void WriteObjectFile(List<byte> result, byte[] data)
+		{
+			int descriptorOffset = result.Count;
+			int texlistOffset = FindChunk(data, "NJTL", "GJTL");
+			int modelOffset = FindChunk(data, "NJBM", "NJCM", "GJBM", "GJCM");
+
+			result.AddRange(new byte[16]);
+			result.AddRange(data);
+
+			WriteInt(result, descriptorOffset, modelOffset >= 0 ? modelOffset + 16 : 16);
+			WriteInt(result, descriptorOffset + 4, data.Length + 16);
+			WriteInt(result, descriptorOffset + 8, texlistOffset >= 0 ? texlistOffset + 16 : 0);
+			WriteInt(result, descriptorOffset + 12, 0);
+		}
+
+		private static void WriteRawFile(List<byte> result, byte[] data)
+		{
+			result.AddRange(data);
+		}
+
+		private static void WriteGapAlignment(List<byte> result, int alignment)
+		{
+			byte[] gap = Encoding.ASCII.GetBytes("GAP ");
+			int gapOffset = 0;
+
+			while (result.Count % alignment != 0)
+			{
+				result.Add(gap[gapOffset]);
+				gapOffset = (gapOffset + 1) % gap.Length;
+			}
+		}
+
+		private static int FindChunk(byte[] data, params string[] magics)
+		{
+			for (int i = 0; i <= data.Length - 4; i++)
+			{
+				foreach (string magic in magics)
+				{
+					if (Encoding.ASCII.GetString(data, i, 4) == magic)
+					{
+						return i;
+					}
+				}
+			}
+
+			return -1;
+		}
+
+		private static void WriteEntry(List<byte> result, int offset, MLDEntryBuildState state)
+		{
+			WriteInt(result, offset, state.Info.Index);
+			WriteInt(result, offset + 4, state.Info.TblID);
+			WriteInt(result, offset + 8, state.GroundLinksOffset);
+			WriteInt(result, offset + 0x0C, state.ParamList2Offset);
+			WriteInt(result, offset + 0x10, state.FunctionParametersOffset);
+			WriteInt(result, offset + 0x14, state.ObjectListOffset);
+			WriteInt(result, offset + 0x18, state.GroundListOffset);
+			WriteInt(result, offset + 0x1C, state.MotionListOffset);
+			WriteInt(result, offset + 0x20, state.TexlistOffset);
+			WriteFixedString(result, offset + 0x24, state.Info.Fxn, 32);
+			WriteBytes(result, offset + 0x44, state.Info.Position.GetBytes());
+			WriteBytes(result, offset + 0x50, state.Info.Rotation.GetBytes());
+			WriteBytes(result, offset + 0x5C, state.Info.Scale.GetBytes());
+		}
+
+		private static void WriteInt(List<byte> result, int offset, int value)
+		{
+			WriteBytes(result, offset, ByteConverter.GetBytes(value));
+		}
+
+		private static void WriteBytes(List<byte> result, int offset, byte[] data)
+		{
+			for (int i = 0; i < data.Length; i++)
+			{
+				result[offset + i] = data[i];
+			}
+		}
+
+		private static void WriteFixedString(List<byte> result, string value, int length)
+		{
+			byte[] bytes = new byte[length];
+			byte[] stringBytes = Encoding.ASCII.GetBytes(value ?? string.Empty);
+			Array.Copy(stringBytes, bytes, Math.Min(stringBytes.Length, length - 1));
+			result.AddRange(bytes);
+		}
+
+		private static void WriteFixedString(List<byte> result, int offset, string value, int length)
+		{
+			byte[] bytes = new byte[length];
+			byte[] stringBytes = Encoding.ASCII.GetBytes(value ?? string.Empty);
+			Array.Copy(stringBytes, bytes, Math.Min(stringBytes.Length, length - 1));
+			WriteBytes(result, offset, bytes);
 		}
 	}
 
@@ -190,7 +683,7 @@ namespace ArchiveLib
 		public nmldObject(byte[] file, int offset, string name)
 		{
 			int ptrNJCM = ByteConverter.ToInt32(file, offset);
-			uint chunksize = ByteConverter.ToUInt32(file, offset + 4) - 16;
+			int chunksize = ByteConverter.ToInt32(file, offset + 4);
 			int ptrNJTL = ByteConverter.ToInt32(file, offset + 8);
 			uint unknown = ByteConverter.ToUInt32(file, offset + 12);
 
@@ -205,8 +698,14 @@ namespace ArchiveLib
 				return;
 			}
 
-			File = new byte[chunksize];
-			Array.Copy(file, start + offset, File, 0, chunksize);
+			if (chunksize < 16)
+			{
+				Console.WriteLine("Object chunk size is invalid.");
+				return;
+			}
+
+			File = new byte[chunksize - 16];
+			Array.Copy(file, offset + 16, File, 0, File.Length);
 
 			Name = name;
 		}
@@ -469,6 +968,16 @@ namespace ArchiveLib
 			}
 			*/
 		}
+
+		public string GetFileName()
+		{
+			return Type switch
+			{
+				GroundType.Ground => Name + ".grnd",
+				GroundType.GroundObject => Name + ".gobj",
+				_ => Name + ".gunk"
+			};
+		}
 	}
 
 	public class nmldMotion
@@ -519,6 +1028,17 @@ namespace ArchiveLib
 			File = new byte[njmsize + pofsize];
 			Array.Copy(file, address, File, 0, njmsize + pofsize);
 		}
+
+		public string GetFileName()
+		{
+			return Type switch
+			{
+				MotionType.Node => Name + ".njm",
+				MotionType.Shape => Name + ".njs",
+				MotionType.Camera => Name + ".njc",
+				_ => Name + ".num"
+			};
+		}
 	}
 
 	public class nmldTextureList
@@ -550,6 +1070,9 @@ namespace ArchiveLib
 		public List<nmldObject> Objects { get; set; } = new();
 		public List<nmldMotion> Motions { get; set; } = new();
 		public List<nmldGround> Grounds { get; set; } = new();
+		public List<string> ObjectFiles { get; set; } = new();
+		public List<string> MotionFiles { get; set; } = new();
+		public List<string> GroundFiles { get; set; } = new();
 		public nmldTextureList Texlist { get; set; } = new();
 		public string Fxn { get; set; } = string.Empty;
 		public Vertex Position { get; set; } = new();
@@ -596,7 +1119,13 @@ namespace ArchiveLib
 				
 				if (address != 0)
 				{
-					Objects.Add(new nmldObject(file, address, GetNameAndIndex(i)));
+					nmldObject obj = new nmldObject(file, address, GetNameAndIndex(i));
+					Objects.Add(obj);
+					ObjectFiles.Add(obj.Name + ".nj");
+				}
+				else
+				{
+					ObjectFiles.Add(string.Empty);
 				}
 			}
 		}
@@ -605,7 +1134,7 @@ namespace ArchiveLib
 		{
 			int count = ByteConverter.ToInt32(file, offset);
 
-			List<int> addrs = new List<int>();
+			Dictionary<int, string> filenames = new();
 
 			for (int i = 0; i < count; i++)
 			{
@@ -613,16 +1142,20 @@ namespace ArchiveLib
 
 				if (address != 0)
 				{
-					if (!addrs.Contains(address))
-						addrs.Add(address);
-				}
-			}
+					if (!filenames.TryGetValue(address, out string filename))
+					{
+						nmldMotion motion = new nmldMotion(file, address, GetNameWithIndex(), filenames.Count.ToString());
+						Motions.Add(motion);
+						filename = motion.GetFileName();
+						filenames.Add(address, filename);
+					}
 
-			int idx = 0;
-			foreach (int addr in addrs)
-			{
-				Motions.Add(new nmldMotion(file, addr, GetNameWithIndex(), idx.ToString()));
-				idx++;
+					MotionFiles.Add(filename);
+				}
+				else
+				{
+					MotionFiles.Add(string.Empty);
+				}
 			}
 		}
 
@@ -636,7 +1169,13 @@ namespace ArchiveLib
 
 				if (address != 0)
 				{
-					Grounds.Add(new nmldGround(file, address, GetNameAndIndex(i)));
+					nmldGround ground = new nmldGround(file, address, GetNameAndIndex(i));
+					Grounds.Add(ground);
+					GroundFiles.Add(ground.GetFileName());
+				}
+				else
+				{
+					GroundFiles.Add(string.Empty);
 				}
 			}
 		}
@@ -660,6 +1199,26 @@ namespace ArchiveLib
 			}
 
 			return sb.ToString();
+		}
+
+		public MLDArchive.MLDEntryInfo ToArchiveInfo()
+		{
+			return new MLDArchive.MLDEntryInfo()
+			{
+				Index = Index,
+				TblID = TblID,
+				Fxn = Fxn,
+				Position = Position,
+				Rotation = Rotation,
+				Scale = Scale,
+				GroundLinks = new List<int>(GroundLinks),
+				ParamList2 = new List<int>(ParamList2),
+				FunctionParameters = new List<int>(FunctionParameters),
+				Objects = new List<string>(ObjectFiles),
+				Grounds = new List<string>(GroundFiles),
+				Motions = new List<string>(MotionFiles),
+				Texlist = Texlist.TexList.NumTextures > 0 ? Texlist.Name : string.Empty
+			};
 		}
 
 		public nmldEntry(int offset, byte[] file)
@@ -693,7 +1252,7 @@ namespace ArchiveLib
 
 			// Get Entry Objects
 			int ptrObjects = ByteConverter.ToInt32(file, offset + 0x14);
-			if (ByteConverter.ToInt32(file, ptrObjects + 4) != 0)
+			if (ByteConverter.ToInt32(file, ptrObjects) != 0)
 				GetObjects(file, ptrObjects);
 
 			// Get Entry Motions
@@ -703,7 +1262,7 @@ namespace ArchiveLib
 
 			// Get Entry Grounds
 			int ptrGrounds = ByteConverter.ToInt32(file, offset + 0x18);
-			if (ByteConverter.ToInt32(file, ptrGrounds + 4) != 0)
+			if (ByteConverter.ToInt32(file, ptrGrounds) != 0)
 				GetGrounds(file, ptrGrounds);
 
 			// Get Entry Textures
@@ -718,6 +1277,8 @@ namespace ArchiveLib
 		public string Name { get; set; } = string.Empty;
 		public List<nmldEntry> Entries { get; set; } = new();
 		public PuyoFile TextureFile { get; set; }
+		public List<int> TextureGBIX { get; set; } = new();
+		public List<int> TextureGBIX2 { get; set; } = new();
 
 		private void GetTextureArchive(byte[] file, int offset)
 		{
@@ -761,11 +1322,15 @@ namespace ArchiveLib
 					int texdataptr2 = texdataptr;
 					string magic = Encoding.ASCII.GetString(file, texdataptr2, 4);
 					int size = 0;
+					int gbix = 0;
+					int gbix2 = 0;
 
 					switch (magic)
 					{
 						case "GBIX":
 						case "GCIX":
+							gbix = ByteConverter.ToInt32(file, texdataptr2 + 8);
+							gbix2 = ByteConverter.ToInt32(file, texdataptr2 + 12);
 							size += ByteConverter.ToInt32(file, texdataptr2 + 4) + 8;
 							texdataptr2 += 16;
 							break;
@@ -774,6 +1339,8 @@ namespace ArchiveLib
 					size += ByteConverter.ToInt32(file, texdataptr2 + 4) + 8;
 					byte[] texture = new byte[size];
 					Array.Copy(file, texdataptr, texture, 0, size);
+					TextureGBIX.Add(gbix);
+					TextureGBIX2.Add(gbix2);
 
 					switch (TextureFile.Type)
 					{
